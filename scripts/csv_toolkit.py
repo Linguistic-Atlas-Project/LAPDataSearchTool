@@ -1,8 +1,9 @@
 import csv
-from itertools import chain
+from itertools import chain, count
 from pathlib import Path
 from contextlib import ExitStack
 import openpyxl as xl
+import re
 
 
 def strip_csv_whitespace(csv_filename: Path) -> None:
@@ -51,7 +52,7 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
         h = str(header).strip().lower()
         if not h:
             raise ValueError(
-                'Encountered an empty column name. Please fix this manually.'
+                f'Encountered an empty column name in {csv_filename}. Please fix this manually.'
             )
         if h[0].isnumeric():
             raise ValueError(
@@ -96,12 +97,20 @@ def convert_excel_file_to_csvs(
 
 
 
-def merge_all_csv_in_dir(input_dir: Path, output_dir: Path = Path('./output/')):
+def merge_all_csv_in_dir(
+        input_dir: Path,
+        output_dir: Path = Path('./output/'),
+        append_page_line: bool = False,
+        filename_regex: re.Pattern | None = None
+    ):
     """Aggregate all CSV files within a directory into a new CSV.
 
     Args:
         input_dir: Directory holding CSV files to be aggregated.
         output_dir: Output directory to hold the aggregated CSV file. Defaults to Path('./output/').
+        append_page_line: Append page and line numbers to the aggregated CSV file. These can be used to couple targets and responses.
+                          Only use this option if the page and line numbers are not already provided in the CSV files.
+        filename_regex: Regex to match filenames by. This must be a regex that provides two named groups for the page and line, named as such.
 
     Raises:
         FileNotFoundError: The input directory did not exist.
@@ -112,6 +121,8 @@ def merge_all_csv_in_dir(input_dir: Path, output_dir: Path = Path('./output/')):
         raise FileNotFoundError('Input directory does not exist')
     if not input_dir.is_dir():
         raise ValueError('Input directory is not actually a directory')
+    if append_page_line and filename_regex is None:
+        raise ValueError('Cannot append page and line information without filename regex.')
 
     try:
         output_dir.mkdir(exist_ok=True, parents=True)
@@ -119,30 +130,48 @@ def merge_all_csv_in_dir(input_dir: Path, output_dir: Path = Path('./output/')):
         raise OSError('Issue occurred making output directory') from e
 
     csv_filenames = list(input_dir.glob('*.csv'))
-    merged_filename = '_'.join(f.stem.replace('_merged', '') for f in csv_filenames) + '_merged.csv'
+    merged_filename = csv_filenames[0].name.split('_')[0] + '_merged.csv'
 
     with ExitStack() as stack:
-        csv_files = [stack.enter_context(open(csv_file, 'r')) for csv_file in csv_filenames]
+        csv_files = {csv_file: stack.enter_context(open(csv_file, 'r')) for csv_file in csv_filenames}
         output_file = stack.enter_context(open(output_dir / merged_filename, 'w'))
 
-        readers = [csv.DictReader(fp) for fp in csv_files]
-        all_headers = chain(*(r.fieldnames for r in readers))
-        seen_headers = set()
+        readers = {name: csv.DictReader(fp) for name, fp in csv_files.items()}
+        all_headers = chain(*(r.fieldnames for r in readers.values()))  # type: ignore
+        seen_headers: set[str] = set()
         seen_headers_add = seen_headers.add
         headers_no_duplicates = [h for h in all_headers if not(h in seen_headers or seen_headers_add(h))]
+        if append_page_line:
+            headers_no_duplicates.append('page')
+            headers_no_duplicates.append('line')
 
         writer = csv.DictWriter(output_file, fieldnames=headers_no_duplicates)
         writer.writeheader()
-        for row in chain(*readers):
-            writer.writerow(row)
+        for name, reader in readers.items():
+            for row in reader:
+                row_to_write = {k: v for k,v in row.items()}
+                if append_page_line:
+                    # filename_regex is guaranteed to not be None at this point
+                    match = filename_regex.match(name)  # type: ignore
+                    if match is None:
+                        raise ValueError(f'The following filename failed to match against the provided regex: {name}')
+                    row_to_write |= match.groupdict()
+                try:
+                    writer.writerow(row_to_write)
+                except:
+                    print(name)
+                    print(row_to_write)
+                    raise
 
 
 
 
 if __name__ == '__main__':
-    gullah_file = (
-        Path('..') / 'data' / 'Gullah' / '#Read-me' / 'Gullah informants_final.xlsx'
-    )
-    # convert_excel_file_to_csvs(gullah_file)
-    # merge_two_csv_files(Path('test1.csv'), Path('test2_merged.csv'))
-    merge_all_csv_in_dir(Path('.'))
+    ...
+    gullah = Path('..') / 'data' / 'Gullah' / 'Text_files'
+    gullah_regex = re.compile(r'Gullah_page(?P<page>[a-z0-9]*)line(?P<line>[a-z0-9]*)_Sheet[0-9]*\.csv')
+
+    for file in gullah.glob('*.xlsx'):
+        convert_excel_file_to_csvs(file)
+
+    merge_all_csv_in_dir(gullah)
