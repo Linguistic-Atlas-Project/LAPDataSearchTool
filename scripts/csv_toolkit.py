@@ -1,9 +1,11 @@
+import argparse
 import csv
+import re
+from contextlib import ExitStack
 from itertools import chain
 from pathlib import Path
-from contextlib import ExitStack
+
 import openpyxl as xl
-import re
 
 
 def obtain_choice_from_user(choices: list[str]) -> str:
@@ -22,12 +24,13 @@ def obtain_choice_from_user(choices: list[str]) -> str:
         raise ValueError('Cannot make a choice out of 1 or fewer options.')
 
     choices = [c.strip().lower() for c in choices]
-    options_str = ', '.join(f'[{c}]' for c in choices[:-1]) + f'{',' if len(choices) > 2 else ''} or [{choices[-1]}]'
+    options_str = (
+        ', '.join(f'[{c}]' for c in choices[:-1])
+        + f'{',' if len(choices) > 2 else ''} or [{choices[-1]}]'
+    )
 
     while (
-        choice := input(f'Do you wish to {options_str} this column? ')
-        .strip()
-        .lower()
+        choice := input(f'Do you wish to {options_str} this column? ').strip().lower()
     ) not in choices:
         print(f'Please choose one of {options_str}.\n')
 
@@ -189,29 +192,51 @@ def prune_empty_csv_columns(csv_filename: Path) -> None:
         writer.writerows(new_rows)
 
 
+def append_metadata_from_filename(
+    csv_filename: Path,
+    filename_regex: re.Pattern,
+) -> None:
+    """Append metadata columns from a CSV filename.
+
+    This appends columns with info on the project, page number, and line number to the CSV from its filename.
+    If any of these columns already exist, the user will be prompted to keep or overwrite the column based on it's contents.
+    Operates in-place on a file.
+
+    Args:
+        csv_filename: Path of CSV file to append metadata to.
+        filename_regex: Regex to match filenames by.
+                This must be a regex that provides only three named groups for the project, page and line, named as such.
+                This regex will be matched against CSV files, not Excel files.
+    """
+    # TODO: write this.
+
+
 def convert_excel_file_to_csvs(
     xlsx_filename: Path,
-    strip_whitespace: bool = True,
-    sanitize_headers: bool = True,
-    prune_empty_columns: bool = True,
-    output_dir: Path = Path('./output/'),
+    strip_whitespace: bool,
+    sanitize_headers: bool,
+    prune_empty_columns: bool,
+    append_metadata: bool,
+    filename_regex: re.Pattern,
+    output_dir: Path,
 ) -> None:
     """Convert an Excel file to CSV format.
     Each independent worksheet within an Excel workbook will become its own CSV.
 
     Args:
         xlsx_filename: Name of Excel file to convert.
-        strip_whitespace: Option to strip whitespace. Defaults to True.
-        sanitize_headers: Option to sanitize headers. Defaults to True.
-        prune_empty_columns: Option to prune empty columns. Defaults to True.
-        output_dir: Output directory to place converted files into. Defaults to Path('./output/').
-
-    Raises:
-        ValueError: The output directory given does not exist.
+        strip_whitespace: Option to strip whitespace.
+        sanitize_headers: Option to sanitize headers.
+        prune_empty_columns: Option to prune empty columns.
+        append_metadata: Option to append file metadata to the CSV based on its filename. Defaults to False.
+        filename_regex: Regex to match filenames by.
+                        This must be a regex that provides only three named groups for the project, page and line, named as such.
+                        This regex will be matched against CSV files, not Excel files. Remember to account for this if providing alternate regex.
+        output_dir: Output directory to place converted files into.
+                    The script will create the output directory if it does not exist.
     """
 
-    if not output_dir.exists():
-        raise ValueError('Output directory does not exist.')
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     wb = xl.load_workbook(xlsx_filename, read_only=True)
     for worksheet in wb.worksheets:
@@ -229,23 +254,19 @@ def convert_excel_file_to_csvs(
             prune_empty_csv_columns(csv_name)
         if sanitize_headers:
             sanitize_csv_column_names(csv_name)
+        if append_metadata:
+            append_metadata_from_filename(csv_name, filename_regex)
 
 
 def merge_all_csv_in_dir(
     input_dir: Path,
-    output_dir: Path = Path('./output/'),
-    append_metadata: bool = False,
-    filename_regex: re.Pattern | None = None,
+    output_dir: Path,
 ) -> None:
     """Aggregate all CSV files within a directory into a new CSV.
 
     Args:
         input_dir: Directory holding CSV files to be aggregated.
         output_dir: Output directory to hold the aggregated CSV file. Defaults to Path('./output/').
-        append_page_line: Append page and line numbers to the aggregated CSV file. These can be used to couple targets and responses.
-                          Only use this option if the page and line numbers are not already provided in the CSV files.
-        filename_regex: Regex to match filenames by.
-                        This must be a regex that provides three named groups for the project, page and line, named as such.
 
     Raises:
         FileNotFoundError: The input directory did not exist.
@@ -256,10 +277,6 @@ def merge_all_csv_in_dir(
         raise FileNotFoundError('Input directory does not exist')
     if not input_dir.is_dir():
         raise ValueError('Input directory is not actually a directory')
-    if append_metadata and filename_regex is None:
-        raise ValueError(
-            'Cannot append page and line information without filename regex.'
-        )
 
     try:
         output_dir.mkdir(exist_ok=True, parents=True)
@@ -277,10 +294,7 @@ def merge_all_csv_in_dir(
         output_file = stack.enter_context(open(output_dir / merged_filename, 'w'))
 
         readers = {name: csv.DictReader(fp) for name, fp in csv_files.items()}
-        if append_metadata:
-            all_headers = chain(*(r.fieldnames for r in readers.values()), ['page', 'line', 'project'])  # type: ignore
-        else:
-            all_headers = chain(*(r.fieldnames for r in readers.values()))  # type: ignore
+        all_headers = chain(*(r.fieldnames for r in readers.values()))  # type: ignore
         seen_headers: set[str] = set()
         seen_headers_add = seen_headers.add
         headers_no_duplicates = [
@@ -292,14 +306,6 @@ def merge_all_csv_in_dir(
         for name, reader in readers.items():
             for row in reader:
                 row_to_write = {k: v for k, v in row.items()}
-                if append_metadata:
-                    # filename_regex is guaranteed to not be None at this point
-                    match = filename_regex.match(name)  # type: ignore
-                    if match is None:
-                        raise ValueError(
-                            f'The following filename failed to match against the provided regex: {name}'
-                        )
-                    row_to_write |= match.groupdict()
                 try:
                     writer.writerow(row_to_write)
                 except:
@@ -308,21 +314,95 @@ def merge_all_csv_in_dir(
                     raise
 
 
-if __name__ == '__main__':
-    ...
-    gullah = Path('..') / 'data' / 'Gullah' / 'Text_files'
-    gullah_regex = re.compile(
-        r'(?P<project>[a-zA-Z]*)_page(?P<page>[a-z0-9]*)line(?P<line>[a-z0-9]*)_Sheet[0-9]*\.csv'
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build command line arguments.
+
+    Returns:
+        Parser for command line arguments.
+    """
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '-w',
+        '--strip_whitespace',
+        action='store_true',
+        help='strip leading and trailing whitespace from CSV entries',
+    )
+    parser.add_argument(
+        '-s',
+        '--sanitize_headers',
+        action='store_true',
+        help='sanitize CSV column headers',
+    )
+    parser.add_argument(
+        '-p',
+        '--prune_empty_columns',
+        action='store_true',
+        help='prune empty columns from CSV',
+    )
+    parser.add_argument(
+        '-a',
+        '--append_metadata',
+        action='store_true',
+        help='append filename metadata to CSV',
+    )
+    parser.add_argument(
+        '-f',
+        '--filename_regex',
+        type=lambda s: re.compile(s),
+        default=re.compile(
+            r'(?P<project>[a-zA-Z]*)'
+            r'_page(?P<page>[a-z0-9]*)'
+            r'line(?P<line>[a-z0-9]*)'
+            r'_Sheet[0-9]*\.csv'
+        ),
+        help=(
+            'expected regex CSV filenames fit under. Must provide named groups for "project", "line", and "page" '
+            '(default: (?P<project>[a-zA-Z]*)_page(?P<page>[a-z0-9]*)line(?P<line>[a-z0-9]*)_Sheet[0-9]*\\.csv )'
+        ),
+    )
+    parser.add_argument(
+        '-m',
+        '--merge',
+        action='store_true',
+        help='merge all processed CSV files into one aggregate file',
+    )
+    parser.add_argument(
+        '-o',
+        '--output_directory',
+        type=Path,
+        default=Path('./output/'),
+        help='output directory for processed Excel files (default: ./output/ )',
+    )
+    parser.add_argument(
+        'input_directory',
+        type=Path,
+        help='directory of Excel (xlsx) files to process',
     )
 
-    for file in gullah.glob('*.xlsx'):
+    return parser
+
+
+def main() -> None:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    # print(args)
+    # return
+    for file in args.input_directory.glob('*.xlsx'):
         print(file)
         convert_excel_file_to_csvs(
             file,
-            strip_whitespace=True,
-            sanitize_headers=True,
-            prune_empty_columns=True,
+            strip_whitespace=args.strip_whitespace,
+            sanitize_headers=args.sanitize_headers,
+            prune_empty_columns=args.prune_empty_columns,
+            append_metadata=args.append_metadata,
+            filename_regex=args.filename_regex,
+            output_dir=args.output_directory,
         )
         break
 
     # merge_all_csv_in_dir(gullah)
+
+
+if __name__ == '__main__':
+    main()
