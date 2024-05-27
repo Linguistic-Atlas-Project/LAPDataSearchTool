@@ -242,8 +242,6 @@ def convert_excel_file_to_csvs(
                     The script will create the output directory if it does not exist.
     """
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     wb = xl.load_workbook(xlsx_filename, read_only=True)
     for worksheet in wb.worksheets:
         csv_name = output_dir / (
@@ -284,15 +282,6 @@ def merge_all_csv_in_dir(
         RuntimeWarning,
     )
     return
-    if not input_dir.exists():
-        raise FileNotFoundError('Input directory does not exist')
-    if not input_dir.is_dir():
-        raise ValueError('Input directory is not actually a directory')
-
-    try:
-        output_dir.mkdir(exist_ok=True, parents=True)
-    except OSError as e:
-        raise OSError('Issue occurred making output directory') from e
 
     csv_filenames = list(input_dir.glob('*.csv'))
     merged_filename = csv_filenames[0].name.split('_')[0] + '_merged.csv'
@@ -395,8 +384,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Process Excel files into CSV files.
+
+    Raises:
+        FileNotFoundError: Input directory does not exist.
+        ValueError: Input directory is not a directory.
+        OSError: Error occurred making output directory (if it did not exist).
+    """
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    if not args.input_directory.exists():
+        raise FileNotFoundError('Input directory does not exist')
+    if not args.input_directory.is_dir():
+        raise ValueError('Input directory is not actually a directory')
+
+    if not args.output_directory:
+        try:
+            args.output_directory.mkdir(exist_ok=True, parents=True)
+        except OSError as e:
+            raise OSError('Issue occurred making output directory') from e
+
     for file in args.input_directory.glob('*.xlsx'):
         print(f'Processing: {file}')
         convert_excel_file_to_csvs(
