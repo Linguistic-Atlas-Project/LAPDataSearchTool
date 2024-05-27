@@ -1,6 +1,7 @@
 import argparse
 import csv
 import re
+import warnings
 from contextlib import ExitStack
 from itertools import chain
 from pathlib import Path
@@ -121,7 +122,8 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
     discarded_column_indices: list[int] = []
     for column_index in empty_column_header_indices:
         print(
-            f'Encountered an empty column name in {csv_filename}. A sample of the column is provided below. '
+            f'Encountered an empty column name in {csv_filename}. '
+            'A sample of the column is provided below. '
         )
         column_sample: list[str] = []
         row_index = 0
@@ -209,6 +211,10 @@ def append_metadata_from_filename(
                 This regex will be matched against CSV files, not Excel files.
     """
     # TODO: write this.
+    warnings.warn(
+        'Appending metadata from filename is not yet implemented. Continuing without appending metadata.',
+        RuntimeWarning,
+    )
 
 
 def convert_excel_file_to_csvs(
@@ -273,6 +279,11 @@ def merge_all_csv_in_dir(
         ValueError: The input directory was not a directory.
         OSError: An issue occurred when making a previously nonexisting output directory.
     """
+    warnings.warn(
+        'Merging functionality is not finished. Exiting early without merging.',
+        RuntimeWarning,
+    )
+    return
     if not input_dir.exists():
         raise FileNotFoundError('Input directory does not exist')
     if not input_dir.is_dir():
@@ -386,10 +397,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    # print(args)
-    # return
     for file in args.input_directory.glob('*.xlsx'):
-        print(file)
+        print(f'Processing: {file}')
         convert_excel_file_to_csvs(
             file,
             strip_whitespace=args.strip_whitespace,
@@ -399,9 +408,10 @@ def main() -> None:
             filename_regex=args.filename_regex,
             output_dir=args.output_directory,
         )
-        break
+        print()
 
-    # merge_all_csv_in_dir(gullah)
+    if args.merge:
+        merge_all_csv_in_dir(args.output_directory, args.output_directory)
 
 
 if __name__ == '__main__':
