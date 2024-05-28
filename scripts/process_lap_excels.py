@@ -113,7 +113,7 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
             empty_column_header_indices.append(column_index)
         if h and h[0].isnumeric():
             print(
-                'Encountered column name that starts with a number. This is not allowed.'
+                f'Encountered column name that starts with a number: {h}. This is not allowed.'
             )
             h = verify_new_column_name()
         h = ''.join(c if c.isalnum() else '_' for c in h)
@@ -399,7 +399,7 @@ def main() -> None:
     if not args.input_directory.is_dir():
         raise ValueError('Input directory is not actually a directory')
 
-    if not args.output_directory:
+    if not args.output_directory.exists():
         try:
             args.output_directory.mkdir(exist_ok=True, parents=True)
         except OSError as e:
