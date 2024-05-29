@@ -157,6 +157,23 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
         writer.writerows(rows)
 
 
+def prune_empty_csv_rows(csv_filename: Path) -> None:
+    """Prune empty columns from a CSV file.
+
+    Operates in-place on a file.
+
+    Args:
+        csv_filename: Path of CSV file to prune.
+    """
+    with open(csv_filename, 'r') as csv_file_obj_r:
+        reader = csv.reader(csv_file_obj_r)
+        new_rows = [row for row in reader if row]
+
+    with open(csv_filename, 'w') as csv_file_obj_w:
+        writer = csv.writer(csv_file_obj_w)
+        writer.writerows(new_rows)
+
+
 def prune_empty_csv_columns(csv_filename: Path) -> None:
     """Prune empty columns from a CSV file.
     Columns with empty header names are pruned silently. If a column name is found, the user is prompted.
@@ -170,6 +187,14 @@ def prune_empty_csv_columns(csv_filename: Path) -> None:
         reader = csv.reader(csv_file_obj_r)
         headers = next(reader)
         rows = list(reader)
+
+    # Generated CSV files can have less headers than the rows do entries, so this
+    # little blurb pads out the headers on the back to realign things.
+    # Otherwise columns are completely missed during processing.
+    max_len_row = len(max((row for row in rows), key=len))
+    header_len = len(headers)
+    for _ in range(max_len_row-header_len):
+        headers.append('')
 
     empty_column_indices = []
     for column_index, header in enumerate(headers):
@@ -258,6 +283,7 @@ def convert_excel_file_to_csvs(
 
         if strip_whitespace:
             strip_csv_whitespace(csv_name)
+        prune_empty_csv_rows(csv_name)
         if prune_empty_columns:
             prune_empty_csv_columns(csv_name)
         if sanitize_headers:
