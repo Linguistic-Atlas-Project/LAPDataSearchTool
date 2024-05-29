@@ -126,13 +126,17 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
             'A sample of the column is provided below. '
         )
         column_sample: list[str] = []
+
         row_index = 0
-        while len(column_sample) != min(
-            12, len(rows)
-        ):  # TODO: make this 12 an argument?
+        num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
+
+        while len(column_sample) < num_sample_entries:
             if (entry := rows[row_index][column_index]) != '':
                 column_sample.append(entry)
             row_index += 1
+            if row_index == len(rows):
+                break
+
         print(' | '.join(column_sample))
 
         choice = obtain_choice_from_user(['rename', 'discard'])
