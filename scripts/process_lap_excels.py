@@ -282,7 +282,7 @@ def merge_all_csv_in_dir(
         RuntimeWarning,
     )
     return
-
+    # TODO: Maybe change this to only process CSV in directory made by script this session?
     csv_filenames = list(input_dir.glob('*.csv'))
     merged_filename = csv_filenames[0].name.split('_')[0] + '_merged.csv'
 
@@ -322,33 +322,52 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser()
 
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        '-b',
+        '--batch',
+        action='store_const',
+        dest='mode',
+        const='batch',
+        default='batch',
+        help='process whole directory of files (default)',
+    )
+    group.add_argument(
+        '-s',
+        '--single-file',
+        action='store_const',
+        dest='mode',
+        const='single',
+        help='process single file only',
+    )
+
     parser.add_argument(
         '-w',
-        '--strip_whitespace',
+        '--strip-whitespace',
         action='store_true',
         help='strip leading and trailing whitespace from CSV entries',
     )
     parser.add_argument(
-        '-s',
-        '--sanitize_headers',
+        '-c',
+        '--sanitize-headers',
         action='store_true',
         help='sanitize CSV column headers',
     )
     parser.add_argument(
         '-p',
-        '--prune_empty_columns',
+        '--prune-empty-columns',
         action='store_true',
         help='prune empty columns from CSV',
     )
     parser.add_argument(
         '-a',
-        '--append_metadata',
+        '--append-metadata',
         action='store_true',
         help='append filename metadata to CSV',
     )
     parser.add_argument(
         '-f',
-        '--filename_regex',
+        '--filename-regex',
         type=lambda s: re.compile(s),
         default=re.compile(
             r'(?P<project>[a-zA-Z]*)'
@@ -369,18 +388,83 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-o',
-        '--output_directory',
+        '--output-directory',
         type=Path,
         default=Path('./output/'),
         help='output directory for processed Excel files (default: ./output/ )',
     )
     parser.add_argument(
-        'input_directory',
+        'input_path',
         type=Path,
-        help='directory of Excel (xlsx) files to process',
+        help='path to Excel (xlsx) file(s) to process',
     )
 
     return parser
+
+
+def process_batch(cmd_args: argparse.Namespace) -> None:
+    """Process a directory of Excel files into CSV files.
+
+    Args:
+        cmd_args: Command line arguments provided by user.
+
+    Raises:
+        ValueError: Input path is not a directory.
+    """
+    if not cmd_args.input_path.is_dir():
+        raise ValueError(
+            f'Batch mode input path is not a directory: {cmd_args.input_path}'
+        )
+
+    for file in cmd_args.input_path.glob('*.xlsx'):
+        print(f'Processing: {file}')
+        convert_excel_file_to_csvs(
+            file,
+            strip_whitespace=cmd_args.strip_whitespace,
+            sanitize_headers=cmd_args.sanitize_headers,
+            prune_empty_columns=cmd_args.prune_empty_columns,
+            append_metadata=cmd_args.append_metadata,
+            filename_regex=cmd_args.filename_regex,
+            output_dir=cmd_args.output_directory,
+        )
+        print()
+
+    if cmd_args.merge:
+        merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
+
+
+def process_single(cmd_args: argparse.Namespace) -> None:
+    """Process a single Excel files into a CSV file.
+
+    Args:
+        cmd_args: Command line arguments provided by user.
+
+    Raises:
+        ValueError: Input path is not a file.
+        ValueError: Input path is not an Excel (.xlsx) file.
+    """
+    if not cmd_args.input_path.is_file():
+        raise ValueError(
+            f'Single file mode input path is not a file: {cmd_args.input_path}'
+        )
+    if cmd_args.input_path.suffix != '.xlsx':
+        raise ValueError(
+            f'Input path is not an Excel file (.xlsx): {cmd_args.input_path}'
+        )
+
+    print(f'Processing: {cmd_args.input_path}')
+    convert_excel_file_to_csvs(
+        cmd_args.input_path,
+        strip_whitespace=cmd_args.strip_whitespace,
+        sanitize_headers=cmd_args.sanitize_headers,
+        prune_empty_columns=cmd_args.prune_empty_columns,
+        append_metadata=cmd_args.append_metadata,
+        filename_regex=cmd_args.filename_regex,
+        output_dir=cmd_args.output_directory,
+    )
+
+    if cmd_args.merge:
+        merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
 
 def main() -> None:
@@ -388,16 +472,13 @@ def main() -> None:
 
     Raises:
         FileNotFoundError: Input directory does not exist.
-        ValueError: Input directory is not a directory.
         OSError: Error occurred making output directory (if it did not exist).
     """
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    if not args.input_directory.exists():
-        raise FileNotFoundError('Input directory does not exist')
-    if not args.input_directory.is_dir():
-        raise ValueError('Input directory is not actually a directory')
+    if not args.input_path.exists():
+        raise FileNotFoundError('Input path does not exist')
 
     if not args.output_directory.exists():
         try:
@@ -405,21 +486,11 @@ def main() -> None:
         except OSError as e:
             raise OSError('Issue occurred making output directory') from e
 
-    for file in args.input_directory.glob('*.xlsx'):
-        print(f'Processing: {file}')
-        convert_excel_file_to_csvs(
-            file,
-            strip_whitespace=args.strip_whitespace,
-            sanitize_headers=args.sanitize_headers,
-            prune_empty_columns=args.prune_empty_columns,
-            append_metadata=args.append_metadata,
-            filename_regex=args.filename_regex,
-            output_dir=args.output_directory,
-        )
-        print()
+    if args.mode == 'batch':
+        process_batch(args)
 
-    if args.merge:
-        merge_all_csv_in_dir(args.output_directory, args.output_directory)
+    elif args.mode == 'single':
+        process_single(args)
 
 
 if __name__ == '__main__':
