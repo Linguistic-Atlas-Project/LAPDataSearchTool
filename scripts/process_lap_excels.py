@@ -9,6 +9,8 @@ from pathlib import Path
 import openpyxl as xl
 
 
+# TODO: functionality to stop script early and rerun later from same spot
+
 def obtain_choice_from_user(choices: list[str]) -> str:
     """Obtain a choice from the user via the command line.
 
@@ -100,6 +102,7 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
     Args:
         csv_filename: Path of CSV to sanitize columns within.
     """
+    # TODO: Verify first row is in fact column headers before continuing with sanitization
     with open(csv_filename, 'r') as csv_file_obj_r:
         reader = csv.reader(csv_file_obj_r)
         headers = next(reader)
@@ -226,24 +229,53 @@ def prune_empty_csv_columns(csv_filename: Path) -> None:
 def append_metadata_from_filename(
     csv_filename: Path,
     filename_regex: re.Pattern,
+    xlsx_filename: Path,
 ) -> None:
-    """Append metadata columns from a CSV filename.
+    """Append metadata columns to a CSV from a filename.
 
-    This appends columns with info on the project, page number, and line number to the CSV from its filename.
+    This appends columns with info on the project, page number, and line number to the CSV from a filename.
     If any of these columns already exist, the user will be prompted to keep or overwrite the column based on it's contents.
     Operates in-place on a file.
 
     Args:
         csv_filename: Path of CSV file to append metadata to.
         filename_regex: Regex to match filenames by.
-                This must be a regex that provides only three named groups for the project, page and line, named as such.
-                This regex will be matched against CSV files, not Excel files.
+                        This must be a regex that provides exactly three named groups for the 'project', 'page', and 'line', named as such.
+                        This regex will be matched against the original Excel file.
+        xlsx_filename: Path of original Excel file CSV was generated from.
+                       If given, the filename regex will be applied to this filename, and not the CSV filename.
+
+    Raises:
+        KeyError: Provided regex had a disallowed group name.
+        ValueError: No fieldnames were found in the provided CSV file.
     """
-    # TODO: write this.
-    warnings.warn(
-        'Appending metadata from filename is not yet implemented. Continuing without appending metadata.',
-        RuntimeWarning,
-    )
+
+    match = filename_regex.match(str(xlsx_filename.name))
+    if match is None:
+        print(f'Cannot parse filename "{xlsx_filename}" with given regex /{filename_regex}/. Exiting early without appending metadata')
+        return
+
+    metadata = {k.lower(): v for k, v in match.groupdict().items()}
+
+    for key in metadata:
+        if key not in ['project', 'page', 'line']:
+            raise KeyError(f'Filename regex returned a group "{key}" that is not one of "project", "page", or "line"')
+
+    with open(csv_filename, 'r') as csv_file_obj_r:
+        reader = csv.DictReader(csv_file_obj_r)
+        fieldnames = reader.fieldnames
+        if fieldnames is None:
+            raise ValueError(f'No fieldnames found in {csv_filename}')
+        rows = list(reader)
+
+    new_rows = [row | metadata | {'filename': xlsx_filename.name} for row in rows]
+    fieldnames = [*fieldnames, *metadata.keys(), 'filename']
+
+    with open(csv_filename, 'w') as csv_file_obj_w:
+        writer = csv.DictWriter(csv_file_obj_w, fieldnames)
+        writer.writeheader()
+        writer.writerows(new_rows)
+
 
 
 def convert_excel_file_to_csvs(
@@ -289,7 +321,7 @@ def convert_excel_file_to_csvs(
         if sanitize_headers:
             sanitize_csv_column_names(csv_name)
         if append_metadata:
-            append_metadata_from_filename(csv_name, filename_regex)
+            append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
 
 
 def merge_all_csv_in_dir(
@@ -373,9 +405,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         '-w',
-        '--strip-whitespace',
-        action='store_true',
-        help='strip leading and trailing whitespace from CSV entries',
+        '--no-strip-whitespace',
+        action='store_false',
+        help='do not strip leading and trailing whitespace from CSV entries',
     )
     parser.add_argument(
         '-c',
@@ -401,13 +433,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=lambda s: re.compile(s),
         default=re.compile(
             r'(?P<project>[a-zA-Z]*)'
-            r'_page(?P<page>[a-z0-9]*)'
-            r'line(?P<line>[a-z0-9]*)'
-            r'_Sheet[0-9]*\.csv'
+            r'_page(?P<page>[a-zA-Z0-9]*)'
+            r'line(?P<line>[a-zA-Z0-9]*)'
+            r'\.xlsx'
         ),
         help=(
-            'expected regex CSV filenames fit under. Must provide named groups for "project", "line", and "page" '
-            '(default: (?P<project>[a-zA-Z]*)_page(?P<page>[a-z0-9]*)line(?P<line>[a-z0-9]*)_Sheet[0-9]*\\.csv )'
+            'expected regex Excel filenames fit under. Must exactly provide named groups for "project", "line", and "page" '
+            '(default: (?P<project>[a-zA-Z]*)_page(?P<page>[a-zA-Z0-9]*)line(?P<line>[a-zA-Z0-9]*)\\.xlsx )'
         ),
     )
     parser.add_argument(
@@ -450,7 +482,7 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
         print(f'Processing: {file}')
         convert_excel_file_to_csvs(
             file,
-            strip_whitespace=cmd_args.strip_whitespace,
+            strip_whitespace=cmd_args.no_strip_whitespace,
             sanitize_headers=cmd_args.sanitize_headers,
             prune_empty_columns=cmd_args.prune_empty_columns,
             append_metadata=cmd_args.append_metadata,
@@ -485,7 +517,7 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     print(f'Processing: {cmd_args.input_path}')
     convert_excel_file_to_csvs(
         cmd_args.input_path,
-        strip_whitespace=cmd_args.strip_whitespace,
+        strip_whitespace=cmd_args.no_strip_whitespace,
         sanitize_headers=cmd_args.sanitize_headers,
         prune_empty_columns=cmd_args.prune_empty_columns,
         append_metadata=cmd_args.append_metadata,
