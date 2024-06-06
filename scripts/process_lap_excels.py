@@ -9,7 +9,8 @@ from pathlib import Path
 import openpyxl as xl
 
 
-# TODO: functionality to stop script early and rerun later from same spot
+# TODO: functionality to stop script early and rerun later from same spot?
+
 
 def obtain_choice_from_user(choices: list[str]) -> str:
     """Obtain a choice from the user via the command line.
@@ -93,7 +94,7 @@ def strip_csv_whitespace(csv_filename: Path) -> None:
         writer.writerows(cleaned_rows)
 
 
-def sanitize_csv_column_names(csv_filename: Path) -> None:
+def sanitize_csv_column_names(csv_filename: Path, destructive: bool) -> None:
     """Sanitize CSV column names into ones suitable to be identifiers.
     For these purposes, a suitable identifier is a valid Python identifier.
 
@@ -110,46 +111,60 @@ def sanitize_csv_column_names(csv_filename: Path) -> None:
 
     sanitized_headers: list[str] = []
     empty_column_header_indices: list[int] = []
+    discarded_column_indices: list[int] = []
+
     for column_index, header in enumerate(headers):
         h = str(header).strip().lower()
         if not h:
             empty_column_header_indices.append(column_index)
         if h and h[0].isnumeric():
-            print(
-                f'Encountered column name that starts with a number: {h}. This is not allowed.'
-            )
-            h = verify_new_column_name()
+            if not destructive:
+                print(
+                    f'Encountered column name that starts with a number: {h}. This is not allowed.'
+                )
+                choice = obtain_choice_from_user(['rename', 'discard'])
+            else:
+                choice = 'discard'
+
+            if choice == 'rename':
+                h = verify_new_column_name()
+            elif choice == 'discard':
+                discarded_column_indices.append(column_index)
+
         h = ''.join(c if c.isalnum() else '_' for c in h)
         sanitized_headers.append(h)
 
-    discarded_column_indices: list[int] = []
     for column_index in empty_column_header_indices:
-        print(
-            f'Encountered an empty column name in {csv_filename}. '
-            'A sample of the column is provided below. '
-        )
-        column_sample: list[str] = []
+        if not destructive:
+            print(
+                f'Encountered an empty column name in {csv_filename}. '
+                'A sample of the column is provided below. '
+            )
+            column_sample: list[str] = []
 
-        row_index = 0
-        num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
+            row_index = 0
+            num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
 
-        while len(column_sample) < num_sample_entries:
-            if (entry := rows[row_index][column_index]) != '':
-                column_sample.append(entry)
-            row_index += 1
-            if row_index == len(rows):
-                break
+            while len(column_sample) < num_sample_entries:
+                if (entry := rows[row_index][column_index]) != '':
+                    column_sample.append(entry)
+                row_index += 1
+                if row_index == len(rows):
+                    break
 
-        print(' | '.join(column_sample))
+            print(' | '.join(column_sample))
+            choice = obtain_choice_from_user(['rename', 'discard'])
+            print()
+        else:
+            choice = 'discard'
 
-        choice = obtain_choice_from_user(['rename', 'discard'])
         if choice == 'rename':
             sanitized_headers[column_index] = verify_new_column_name()
         elif choice == 'discard':
             discarded_column_indices.append(column_index)
-        print()
 
-    for column_index in reversed(discarded_column_indices):
+
+    for column_index in reversed(sorted(discarded_column_indices)):
         sanitized_headers.pop(column_index)
         for row in rows:
             row.pop(column_index)
@@ -177,11 +192,10 @@ def prune_empty_csv_rows(csv_filename: Path) -> None:
         writer.writerows(new_rows)
 
 
-def prune_empty_csv_columns(csv_filename: Path) -> None:
-    """Prune empty columns from a CSV file.
-    Columns with empty header names are pruned silently. If a column name is found, the user is prompted.
+def prune_padding_csv_columns(csv_filename: Path) -> None:
+    """Prune empty columns that have no header from a CSV file.
 
-    Operates in-place on a file.
+     Operates in-place on a file.
 
     Args:
         csv_filename: Path of CSV file to prune.
@@ -196,7 +210,7 @@ def prune_empty_csv_columns(csv_filename: Path) -> None:
     # Otherwise columns are completely missed during processing.
     max_len_row = len(max((row for row in rows), key=len))
     header_len = len(headers)
-    for _ in range(max_len_row-header_len):
+    for _ in range(max_len_row - header_len):
         headers.append('')
 
     empty_column_indices = []
@@ -207,12 +221,49 @@ def prune_empty_csv_columns(csv_filename: Path) -> None:
         else:
             if header == '':
                 empty_column_indices.append(column_index)
-            else:
+
+    new_rows = []
+    for row in chain([headers], rows):
+        new_row = row[:]
+        for empty_index in reversed(empty_column_indices):
+            new_row.pop(empty_index)
+        new_rows.append(new_row)
+
+    with open(csv_filename, 'w') as csv_file_obj_w:
+        writer = csv.writer(csv_file_obj_w)
+        writer.writerows(new_rows)
+
+
+def prune_empty_csv_columns(csv_filename: Path, destructive: bool) -> None:
+    """Prune empty columns that have a header from a CSV file.
+    The user is prompted for every empty column found.
+
+    Operates in-place on a file.
+
+    Args:
+        csv_filename: Path of CSV file to prune.
+    """
+    with open(csv_filename, 'r') as csv_file_obj_r:
+        reader = csv.reader(csv_file_obj_r)
+        headers = next(reader)
+        rows = list(reader)
+
+    empty_column_indices = []
+    for column_index, header in enumerate(headers):
+        for row in rows:
+            if row[column_index] != '':
+                break
+        else:
+            if not destructive:
                 print(f'Column "{header}" was found to be empty.')
                 choice = obtain_choice_from_user(['discard', 'keep'])
-                if choice == 'discard':
-                    empty_column_indices.append(column_index)
                 print()
+            else:
+                choice = 'discard'
+
+            if choice == 'discard':
+                empty_column_indices.append(column_index)
+
 
     new_rows = []
     for row in chain([headers], rows):
@@ -252,14 +303,18 @@ def append_metadata_from_filename(
 
     match = filename_regex.match(str(xlsx_filename.name))
     if match is None:
-        print(f'Cannot parse filename "{xlsx_filename}" with given regex /{filename_regex}/. Exiting early without appending metadata')
+        print(
+            f'Cannot parse filename "{xlsx_filename}" with given regex /{filename_regex}/. Exiting early without appending metadata'
+        )
         return
 
     metadata = {k.lower(): v for k, v in match.groupdict().items()}
 
     for key in metadata:
         if key not in ['project', 'page', 'line']:
-            raise KeyError(f'Filename regex returned a group "{key}" that is not one of "project", "page", or "line"')
+            raise KeyError(
+                f'Filename regex returned a group "{key}" that is not one of "project", "page", or "line"'
+            )
 
     with open(csv_filename, 'r') as csv_file_obj_r:
         reader = csv.DictReader(csv_file_obj_r)
@@ -277,11 +332,11 @@ def append_metadata_from_filename(
         writer.writerows(new_rows)
 
 
-
 def convert_excel_file_to_csvs(
     xlsx_filename: Path,
     strip_whitespace: bool,
     sanitize_headers: bool,
+    destructive_sanitization: bool,
     prune_empty_columns: bool,
     append_metadata: bool,
     filename_regex: re.Pattern,
@@ -294,6 +349,7 @@ def convert_excel_file_to_csvs(
         xlsx_filename: Name of Excel file to convert.
         strip_whitespace: Option to strip whitespace.
         sanitize_headers: Option to sanitize headers.
+        destructive_sanitization: Option to, when sanitizing, discard all problems silently.
         prune_empty_columns: Option to prune empty columns.
         append_metadata: Option to append file metadata to the CSV based on its filename. Defaults to False.
         filename_regex: Regex to match filenames by.
@@ -316,10 +372,11 @@ def convert_excel_file_to_csvs(
         if strip_whitespace:
             strip_csv_whitespace(csv_name)
         prune_empty_csv_rows(csv_name)
+        prune_padding_csv_columns(csv_name)
         if prune_empty_columns:
-            prune_empty_csv_columns(csv_name)
+            prune_empty_csv_columns(csv_name, destructive_sanitization)
         if sanitize_headers:
-            sanitize_csv_column_names(csv_name)
+            sanitize_csv_column_names(csv_name, destructive_sanitization)
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
 
@@ -339,11 +396,6 @@ def merge_all_csv_in_dir(
         ValueError: The input directory was not a directory.
         OSError: An issue occurred when making a previously nonexisting output directory.
     """
-    warnings.warn(
-        'Merging functionality is not finished. Exiting early without merging.',
-        RuntimeWarning,
-    )
-    return
     # TODO: Maybe change this to only process CSV in directory made by script this session?
     csv_filenames = list(input_dir.glob('*.csv'))
     merged_filename = csv_filenames[0].name.split('_')[0] + '_merged.csv'
@@ -351,7 +403,7 @@ def merge_all_csv_in_dir(
     with ExitStack() as stack:
         csv_files = {
             csv_file: stack.enter_context(open(csv_file, 'r'))
-            for csv_file in csv_filenames
+            for csv_file in csv_filenames if 'merged' not in csv_file.name
         }
         output_file = stack.enter_context(open(output_dir / merged_filename, 'w'))
 
@@ -382,7 +434,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     Returns:
         Parser for command line arguments.
     """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description='process and convert LAP Excel files to CSV format. Original Excel files are untouched.')
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -411,21 +463,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-c',
-        '--sanitize-headers',
+        '--no-sanitize-headers',
+        action='store_false',
+        help='do not sanitize CSV column headers',
+    )
+    parser.add_argument(
+        '-d',
+        '--destructive-sanitization',
         action='store_true',
-        help='sanitize CSV column headers',
+        help='silently discard empty columns and columns with unsanitary headers without any user prompting. Can be destructive.',
     )
     parser.add_argument(
         '-p',
-        '--prune-empty-columns',
-        action='store_true',
-        help='prune empty columns from CSV',
+        '--no-prune-empty-columns',
+        action='store_false',
+        help='do not prune empty columns from CSV',
     )
     parser.add_argument(
         '-a',
-        '--append-metadata',
-        action='store_true',
-        help='append filename metadata to CSV',
+        '--no-append-metadata',
+        action='store_false',
+        help='do not append filename metadata to CSV',
     )
     parser.add_argument(
         '-f',
@@ -483,15 +541,19 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
         convert_excel_file_to_csvs(
             file,
             strip_whitespace=cmd_args.no_strip_whitespace,
-            sanitize_headers=cmd_args.sanitize_headers,
-            prune_empty_columns=cmd_args.prune_empty_columns,
-            append_metadata=cmd_args.append_metadata,
+            sanitize_headers=cmd_args.no_sanitize_headers,
+            destructive_sanitization=cmd_args.destructive_sanitization,
+            prune_empty_columns=cmd_args.no_prune_empty_columns,
+            append_metadata=cmd_args.no_append_metadata,
             filename_regex=cmd_args.filename_regex,
             output_dir=cmd_args.output_directory,
         )
-        print()
+        if not cmd_args.destructive_sanitization:
+            print()
 
-    if cmd_args.merge:
+    if cmd_args.merge and not cmd_args.no_sanitize_headers:
+        print('Error cannot merge without sanitized headers')
+    elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
 
@@ -518,14 +580,17 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     convert_excel_file_to_csvs(
         cmd_args.input_path,
         strip_whitespace=cmd_args.no_strip_whitespace,
-        sanitize_headers=cmd_args.sanitize_headers,
-        prune_empty_columns=cmd_args.prune_empty_columns,
-        append_metadata=cmd_args.append_metadata,
+        sanitize_headers=cmd_args.no_sanitize_headers,
+        destructive_sanitization=cmd_args.destructive_sanitization,
+        prune_empty_columns=cmd_args.no_prune_empty_columns,
+        append_metadata=cmd_args.no_append_metadata,
         filename_regex=cmd_args.filename_regex,
         output_dir=cmd_args.output_directory,
     )
 
-    if cmd_args.merge:
+    if cmd_args.merge and cmd_args.no_sanitize_headers:
+        ...  # Error cannot merge without sanitized headers
+    elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
 
