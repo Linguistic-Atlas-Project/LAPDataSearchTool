@@ -282,7 +282,7 @@ def prune_empty_csv_rows(csv_filename: Path) -> None:
     """
     with open(csv_filename, 'r') as csv_file_obj_r:
         reader = csv.reader(csv_file_obj_r)
-        new_rows = [row for row in reader if row]
+        new_rows = [row for row in reader if not all('' == s for s in row)]
 
     with open(csv_filename, 'w') as csv_file_obj_w:
         writer = csv.writer(csv_file_obj_w)
@@ -430,7 +430,7 @@ def append_metadata_from_filename(
         writer.writerows(new_rows)
 
 
-def fill_in_missing_entries(csv_filename: Path) -> None:
+def fill_in_missing_entries(csv_filename: Path, enforce_headers: bool) -> None:
     with open(csv_filename, 'r') as csv_file_obj_r:
         reader = csv.DictReader(csv_file_obj_r)
         fieldnames = reader.fieldnames
@@ -438,9 +438,20 @@ def fill_in_missing_entries(csv_filename: Path) -> None:
             raise ValueError(f'No fieldnames found in {csv_filename}')
         rows = list(reader)
 
+    if enforce_headers:
+        fieldnames = ALLOWED_COLUMN_NAMES
+
     new_rows = []
     for row in rows:
         new_row = {k: v for k, v in row.items()}
+        print(new_row)
+        if enforce_headers:
+            allowed_headers = ALLOWED_COLUMN_NAMES[:]
+            for header in new_row:
+                allowed_headers.remove(header)
+            for header in allowed_headers:
+                new_row[header] = ''
+
         try:
             if new_row['response'] == '':
                 new_row['response'] = 'NR'
@@ -452,6 +463,7 @@ def fill_in_missing_entries(csv_filename: Path) -> None:
                 new_row['phonetic_transcription'] = 'see field pages'
         except KeyError:
             pass
+
         new_rows.append(new_row)
 
     with open(csv_filename, 'w') as csv_file_obj_w:
@@ -462,7 +474,6 @@ def fill_in_missing_entries(csv_filename: Path) -> None:
 
 def convert_excel_file_to_csvs(
     xlsx_filename: Path,
-    strip_whitespace: bool,
     sanitize_headers: bool,
     destructive_sanitization: bool,
     discard_empty: bool,
@@ -501,8 +512,8 @@ def convert_excel_file_to_csvs(
             for row in worksheet.values:
                 writer.writerow(row)
 
-        if strip_whitespace:
-            strip_csv_whitespace(csv_name)
+
+        strip_csv_whitespace(csv_name)
         prune_empty_csv_rows(csv_name)
         prune_padding_csv_columns(csv_name)
         if prune_empty_columns:
@@ -517,7 +528,7 @@ def convert_excel_file_to_csvs(
             )
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
-        fill_in_missing_entries(csv_name)
+        fill_in_missing_entries(csv_name, enforce_headers)
 
 
 def merge_all_csv_in_dir(
@@ -567,8 +578,6 @@ def merge_all_csv_in_dir(
                     print(row_to_write)
                     raise
 
-    fill_in_missing_entries(output_dir / merged_filename)
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build command line arguments.
@@ -599,12 +608,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='process single file only',
     )
 
-    parser.add_argument(
-        '-w',
-        '--no-strip-whitespace',
-        action='store_false',
-        help='do not strip leading and trailing whitespace from CSV entries',
-    )
     parser.add_argument(
         '-c',
         '--no-sanitize-headers',
@@ -702,7 +705,6 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
         print(f'Processing: {file}')
         convert_excel_file_to_csvs(
             file,
-            strip_whitespace=cmd_args.no_strip_whitespace,
             sanitize_headers=cmd_args.no_sanitize_headers,
             destructive_sanitization=cmd_args.destructive_sanitization,
             discard_empty=cmd_args.discard_empty_columns,
@@ -746,7 +748,6 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     print(f'Processing: {cmd_args.input_path}')
     convert_excel_file_to_csvs(
         cmd_args.input_path,
-        strip_whitespace=cmd_args.no_strip_whitespace,
         sanitize_headers=cmd_args.no_sanitize_headers,
         destructive_sanitization=cmd_args.destructive_sanitization,
         discard_empty=cmd_args.discard_empty_columns,
