@@ -11,8 +11,20 @@ import openpyxl as xl
 
 # TODO: functionality to stop script early and rerun later from same spot?
 
+ALLOWED_COLUMN_NAMES = [
+    'informant',
+    'response',
+    'comments',
+    'phonetic_transcription',
+    'project',
+    'page',
+    'line',
+    'filename',
+]
+remembered_enforced_column_name_changes: dict[str, int] = {}
 
-def obtain_choice_from_user(choices: list[str]) -> str:
+
+def obtain_choice_from_user(choices: list[str], message: str) -> str:
     """Obtain a choice from the user via the command line.
 
     Args:
@@ -33,39 +45,92 @@ def obtain_choice_from_user(choices: list[str]) -> str:
         + f'{',' if len(choices) > 2 else ''} or [{choices[-1]}]'
     )
 
-    while (
-        choice := input(f'Do you wish to {options_str} this column? ').strip().lower()
-    ) not in choices:
+    while (choice := input(message.format(options_str)).strip().lower()) not in choices:
         print(f'Please choose one of {options_str}.\n')
 
     return choice
 
 
-def verify_new_column_name() -> str:
+def verify_new_column_name(enforce: bool, original_column_name: str) -> str:
     """Verify a new column name from the user via the command line.
 
     Returns:
         The name column name, sanitized.
     """
-    while True:
-        name = (
-            input('Please enter a new column name (case insensitive): ').strip().lower()
-        )
-        if not name.isidentifier():
-            print(
-                'New name is not a valid identifier. '
-                'Please only use characters alphanumeric characters and underscores. '
-                'The first character cannot be a number.\n'
+    if not enforce:
+        while True:
+            name = (
+                input('Please enter a new column name (case insensitive): ')
+                .strip()
+                .lower()
             )
-            continue
-        if (
-            name
-            == input('Please confirm the new column name (case insensitive): ')
-            .strip()
-            .lower()
-        ):
-            return name
-        print('New name and confirmation did not match.\n')
+            if not name.isidentifier():
+                print(
+                    'New name is not a valid identifier. '
+                    'Please only use characters alphanumeric characters and underscores. '
+                    'The first character cannot be a number.\n'
+                )
+                continue
+            if (
+                name
+                == input('Please confirm the new column name (case insensitive): ')
+                .strip()
+                .lower()
+            ):
+                return name
+            print('New name and confirmation did not match.\n')
+    else:
+        if original_column_name in remembered_enforced_column_name_changes:
+            return ALLOWED_COLUMN_NAMES[
+                remembered_enforced_column_name_changes[original_column_name]
+            ]
+
+        print(f'A disallowed column name was encountered: "{original_column_name}".')
+        print('Please choose the closest allowed column name, or discard this column.')
+        print(
+            'The following are allowable column names. Please make your choice by number.'
+        )
+        print('0. DISCARD THIS COLUMN')
+        for i, c in enumerate(ALLOWED_COLUMN_NAMES):
+            print(f'{i+1}. {c.replace('_', ' ').title()}')
+
+        while True:
+            try:
+                number = (
+                    int(input('Please input the number of your choice: ').strip()) - 1
+                )
+            except ValueError:
+                print('That was not a number.\n')
+                continue
+
+            if number not in range(-1, len(ALLOWED_COLUMN_NAMES)):
+                print('That was not a valid choice.\n')
+                continue
+
+            choice = obtain_choice_from_user(
+                ['yes', 'no'], 'Remember this decision? {} '
+            )
+            print()
+            if choice == 'yes':
+                remembered_enforced_column_name_changes[original_column_name] = number
+
+            return ALLOWED_COLUMN_NAMES[number] if number != -1 else ''
+
+
+def print_column_sample(rows: list[list[str]], column_index: int) -> None:
+    column_sample: list[str] = []
+
+    row_index = 0
+    num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
+
+    while len(column_sample) < num_sample_entries:
+        if (entry := rows[row_index][column_index]) != '':
+            column_sample.append(entry)
+        row_index += 1
+        if row_index == len(rows):
+            break
+
+    print(' | '.join(column_sample))
 
 
 def strip_csv_whitespace(csv_filename: Path) -> None:
@@ -94,7 +159,13 @@ def strip_csv_whitespace(csv_filename: Path) -> None:
         writer.writerows(cleaned_rows)
 
 
-def sanitize_csv_column_names(csv_filename: Path, destructive: bool) -> None:
+def sanitize_csv_column_names(
+    csv_filename: Path,
+    destructive: bool,
+    discard_empty: bool,
+    assume_headers: bool,
+    enforce_headers: bool,
+) -> None:
     """Sanitize CSV column names into ones suitable to be identifiers.
     For these purposes, a suitable identifier is a valid Python identifier.
 
@@ -102,32 +173,67 @@ def sanitize_csv_column_names(csv_filename: Path, destructive: bool) -> None:
 
     Args:
         csv_filename: Path of CSV to sanitize columns within.
+        destructive: Assuming everything unsanitary should be discarded.
+        assume_headers: Assume the first line of CSV file is headers.
     """
-    # TODO: Verify first row is in fact column headers before continuing with sanitization
     with open(csv_filename, 'r') as csv_file_obj_r:
         reader = csv.reader(csv_file_obj_r)
         headers = next(reader)
         rows = list(reader)
 
-    sanitized_headers: list[str] = []
-    empty_column_header_indices: list[int] = []
     discarded_column_indices: list[int] = []
 
+    if not assume_headers:
+        print('The following is the first row of the file:\n', ' | '.join(headers))
+        choice = obtain_choice_from_user(
+            ['yes', 'no'], message='Please confirm if these are headers {}: '
+        )
+        if choice == 'no':
+            rows.insert(0, headers)
+            new_headers = []
+            print(
+                'Please provide columns names for these columns, in order from left to right, one at a time.'
+            )
+            for column_index in range(len(headers)):
+                print('A sample of the column is provided below')
+                print_column_sample(rows, column_index)
+                choice = obtain_choice_from_user(
+                    ['rename', 'discard'], 'Do you wish to {} this column? '
+                )
+                if choice == 'rename':
+                    new_headers.append(
+                        verify_new_column_name(enforce_headers, headers[column_index])
+                    )
+                elif choice == 'discard':
+                    discarded_column_indices.append(column_index)
+                print()
+
+            headers = new_headers
+
+    sanitized_headers: list[str] = []
+    empty_column_header_indices: list[int] = []
+
     for column_index, header in enumerate(headers):
+        if column_index in discarded_column_indices:
+            continue
         h = str(header).strip().lower()
         if not h:
             empty_column_header_indices.append(column_index)
-        if h and h[0].isnumeric():
+        elif h not in ALLOWED_COLUMN_NAMES and enforce_headers:
+            h = verify_new_column_name(enforce_headers, h)
+        elif h[0].isnumeric():
             if not destructive:
                 print(
                     f'Encountered column name that starts with a number: {h}. This is not allowed.'
                 )
-                choice = obtain_choice_from_user(['rename', 'discard'])
+                choice = obtain_choice_from_user(
+                    ['rename', 'discard'], 'Do you wish to {} this column? '
+                )
             else:
                 choice = 'discard'
 
             if choice == 'rename':
-                h = verify_new_column_name()
+                h = verify_new_column_name(enforce_headers, h)
             elif choice == 'discard':
                 discarded_column_indices.append(column_index)
 
@@ -135,34 +241,25 @@ def sanitize_csv_column_names(csv_filename: Path, destructive: bool) -> None:
         sanitized_headers.append(h)
 
     for column_index in empty_column_header_indices:
-        if not destructive:
+        if not discard_empty:
             print(
                 f'Encountered an empty column name in {csv_filename}. '
                 'A sample of the column is provided below. '
             )
-            column_sample: list[str] = []
-
-            row_index = 0
-            num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
-
-            while len(column_sample) < num_sample_entries:
-                if (entry := rows[row_index][column_index]) != '':
-                    column_sample.append(entry)
-                row_index += 1
-                if row_index == len(rows):
-                    break
-
-            print(' | '.join(column_sample))
-            choice = obtain_choice_from_user(['rename', 'discard'])
+            print_column_sample(rows, column_index)
+            choice = obtain_choice_from_user(
+                ['rename', 'discard'], 'Do you wish to {} this column? '
+            )
             print()
         else:
             choice = 'discard'
 
         if choice == 'rename':
-            sanitized_headers[column_index] = verify_new_column_name()
+            sanitized_headers[column_index] = verify_new_column_name(
+                enforce_headers, sanitized_headers[column_index]
+            )
         elif choice == 'discard':
             discarded_column_indices.append(column_index)
-
 
     for column_index in reversed(sorted(discarded_column_indices)):
         sanitized_headers.pop(column_index)
@@ -256,14 +353,15 @@ def prune_empty_csv_columns(csv_filename: Path, destructive: bool) -> None:
         else:
             if not destructive:
                 print(f'Column "{header}" was found to be empty.')
-                choice = obtain_choice_from_user(['discard', 'keep'])
+                choice = obtain_choice_from_user(
+                    ['discard', 'keep'], 'Do you wish to {} this column? '
+                )
                 print()
             else:
                 choice = 'discard'
 
             if choice == 'discard':
                 empty_column_indices.append(column_index)
-
 
     new_rows = []
     for row in chain([headers], rows):
@@ -337,6 +435,9 @@ def convert_excel_file_to_csvs(
     strip_whitespace: bool,
     sanitize_headers: bool,
     destructive_sanitization: bool,
+    discard_empty: bool,
+    assume_headers: bool,
+    enforce_headers: bool,
     prune_empty_columns: bool,
     append_metadata: bool,
     filename_regex: re.Pattern,
@@ -350,6 +451,7 @@ def convert_excel_file_to_csvs(
         strip_whitespace: Option to strip whitespace.
         sanitize_headers: Option to sanitize headers.
         destructive_sanitization: Option to, when sanitizing, discard all problems silently.
+        assume_headers: Option to assume Excel file first row are column headers.
         prune_empty_columns: Option to prune empty columns.
         append_metadata: Option to append file metadata to the CSV based on its filename. Defaults to False.
         filename_regex: Regex to match filenames by.
@@ -376,7 +478,13 @@ def convert_excel_file_to_csvs(
         if prune_empty_columns:
             prune_empty_csv_columns(csv_name, destructive_sanitization)
         if sanitize_headers:
-            sanitize_csv_column_names(csv_name, destructive_sanitization)
+            sanitize_csv_column_names(
+                csv_name,
+                destructive_sanitization,
+                discard_empty,
+                assume_headers,
+                enforce_headers,
+            )
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
 
@@ -403,7 +511,8 @@ def merge_all_csv_in_dir(
     with ExitStack() as stack:
         csv_files = {
             csv_file: stack.enter_context(open(csv_file, 'r'))
-            for csv_file in csv_filenames if 'merged' not in csv_file.name
+            for csv_file in csv_filenames
+            if 'merged' not in csv_file.name
         }
         output_file = stack.enter_context(open(output_dir / merged_filename, 'w'))
 
@@ -434,7 +543,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     Returns:
         Parser for command line arguments.
     """
-    parser = argparse.ArgumentParser(description='process and convert LAP Excel files to CSV format. Original Excel files are untouched.')
+    parser = argparse.ArgumentParser(
+        description='process and convert LAP Excel files to CSV format. Original Excel files are untouched.'
+    )
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -471,7 +582,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         '-d',
         '--destructive-sanitization',
         action='store_true',
-        help='silently discard empty columns and columns with unsanitary headers without any user prompting. Can be destructive.',
+        help='silently discard columns with unsanitary headers without any user prompting. Can cause data to not be converted.',
+    )
+    parser.add_argument(
+        '-j',
+        '--discard-empty-columns',
+        action='store_true',
+        help='silently discard empty columns without any user prompting. Can cause data to not be converted.',
+    )
+    parser.add_argument(
+        '-n',
+        '--assume-headers',
+        action='store_true',
+        help='assume all Excel files have headers rows. Can cause data to not be converted.',
+    )
+    parser.add_argument(
+        '-e',
+        '--enforce-headers',
+        action='store_true',
+        help=f'enforce at that all column headers are from {'{'}{', '.join(ALLOWED_COLUMN_NAMES)}{'}'}. This does nothing if destructive sanitization is enabled.',
     )
     parser.add_argument(
         '-p',
@@ -543,6 +672,9 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
             strip_whitespace=cmd_args.no_strip_whitespace,
             sanitize_headers=cmd_args.no_sanitize_headers,
             destructive_sanitization=cmd_args.destructive_sanitization,
+            discard_empty=cmd_args.discard_empty_columns,
+            assume_headers=cmd_args.assume_headers,
+            enforce_headers=cmd_args.enforce_headers,
             prune_empty_columns=cmd_args.no_prune_empty_columns,
             append_metadata=cmd_args.no_append_metadata,
             filename_regex=cmd_args.filename_regex,
@@ -552,7 +684,7 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
             print()
 
     if cmd_args.merge and not cmd_args.no_sanitize_headers:
-        print('Error cannot merge without sanitized headers')
+        print('Cannot merge without sanitized headers. Finishing without merging any files.')
     elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
@@ -582,6 +714,9 @@ def process_single(cmd_args: argparse.Namespace) -> None:
         strip_whitespace=cmd_args.no_strip_whitespace,
         sanitize_headers=cmd_args.no_sanitize_headers,
         destructive_sanitization=cmd_args.destructive_sanitization,
+        discard_empty=cmd_args.discard_empty_columns,
+        assume_headers=cmd_args.assume_headers,
+        enforce_headers=cmd_args.enforce_headers,
         prune_empty_columns=cmd_args.no_prune_empty_columns,
         append_metadata=cmd_args.no_append_metadata,
         filename_regex=cmd_args.filename_regex,
@@ -589,7 +724,7 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     )
 
     if cmd_args.merge and cmd_args.no_sanitize_headers:
-        ...  # Error cannot merge without sanitized headers
+        print('Cannot merge without sanitized headers. Finishing without merging any files.')
     elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
