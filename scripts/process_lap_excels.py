@@ -430,6 +430,36 @@ def append_metadata_from_filename(
         writer.writerows(new_rows)
 
 
+def fill_in_missing_entries(csv_filename: Path) -> None:
+    with open(csv_filename, 'r') as csv_file_obj_r:
+        reader = csv.DictReader(csv_file_obj_r)
+        fieldnames = reader.fieldnames
+        if fieldnames is None:
+            raise ValueError(f'No fieldnames found in {csv_filename}')
+        rows = list(reader)
+
+    new_rows = []
+    for row in rows:
+        new_row = {k: v for k, v in row.items()}
+        try:
+            if new_row['response'] == '':
+                new_row['response'] = 'NR'
+        except KeyError:
+            pass
+
+        try:
+            if new_row['phonetic_transcription'] == '':
+                new_row['phonetic_transcription'] = 'see field pages'
+        except KeyError:
+            pass
+        new_rows.append(new_row)
+
+    with open(csv_filename, 'w') as csv_file_obj_w:
+        writer = csv.DictWriter(csv_file_obj_w, fieldnames)
+        writer.writeheader()
+        writer.writerows(new_rows)
+
+
 def convert_excel_file_to_csvs(
     xlsx_filename: Path,
     strip_whitespace: bool,
@@ -487,6 +517,7 @@ def convert_excel_file_to_csvs(
             )
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
+        fill_in_missing_entries(csv_name)
 
 
 def merge_all_csv_in_dir(
@@ -535,6 +566,8 @@ def merge_all_csv_in_dir(
                     print(name)
                     print(row_to_write)
                     raise
+
+    fill_in_missing_entries(output_dir / merged_filename)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -598,9 +631,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-e',
-        '--enforce-headers',
-        action='store_true',
-        help=f'enforce at that all column headers are from {'{'}{', '.join(ALLOWED_COLUMN_NAMES)}{'}'}. This does nothing if destructive sanitization is enabled.',
+        '--no-enforce-headers',
+        action='store_false',
+        help=f'do not enforce at that all column headers are from {'{'}{', '.join(ALLOWED_COLUMN_NAMES)}{'}'}.',
     )
     parser.add_argument(
         '-p',
@@ -674,7 +707,7 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
             destructive_sanitization=cmd_args.destructive_sanitization,
             discard_empty=cmd_args.discard_empty_columns,
             assume_headers=cmd_args.assume_headers,
-            enforce_headers=cmd_args.enforce_headers,
+            enforce_headers=cmd_args.no_enforce_headers,
             prune_empty_columns=cmd_args.no_prune_empty_columns,
             append_metadata=cmd_args.no_append_metadata,
             filename_regex=cmd_args.filename_regex,
@@ -684,7 +717,9 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
             print()
 
     if cmd_args.merge and not cmd_args.no_sanitize_headers:
-        print('Cannot merge without sanitized headers. Finishing without merging any files.')
+        print(
+            'Cannot merge without sanitized headers. Finishing without merging any files.'
+        )
     elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
@@ -716,7 +751,7 @@ def process_single(cmd_args: argparse.Namespace) -> None:
         destructive_sanitization=cmd_args.destructive_sanitization,
         discard_empty=cmd_args.discard_empty_columns,
         assume_headers=cmd_args.assume_headers,
-        enforce_headers=cmd_args.enforce_headers,
+        enforce_headers=cmd_args.no_enforce_headers,
         prune_empty_columns=cmd_args.no_prune_empty_columns,
         append_metadata=cmd_args.no_append_metadata,
         filename_regex=cmd_args.filename_regex,
@@ -724,7 +759,9 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     )
 
     if cmd_args.merge and cmd_args.no_sanitize_headers:
-        print('Cannot merge without sanitized headers. Finishing without merging any files.')
+        print(
+            'Cannot merge without sanitized headers. Finishing without merging any files.'
+        )
     elif cmd_args.merge:
         merge_all_csv_in_dir(cmd_args.output_directory, cmd_args.output_directory)
 
