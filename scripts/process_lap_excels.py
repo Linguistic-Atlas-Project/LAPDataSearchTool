@@ -1,13 +1,11 @@
 import argparse
 import csv
 import re
-import warnings
 from contextlib import ExitStack
 from itertools import chain
 from pathlib import Path
 
 import openpyxl as xl
-
 
 # TODO: functionality to stop script early and rerun later from same spot?
 
@@ -21,6 +19,7 @@ ALLOWED_COLUMN_NAMES = [
     'line',
     'filename',
 ]
+
 remembered_enforced_column_name_changes: dict[str, int] = {}
 
 
@@ -51,7 +50,12 @@ def obtain_choice_from_user(choices: list[str], message: str) -> str:
     return choice
 
 
-def verify_new_column_name(enforce: bool, original_column_name: str) -> str:
+def verify_new_column_name(
+    enforce: bool,
+    original_column_name: str,
+    remember: bool,
+    discard_allowed: bool,
+) -> str:
     """Verify a new column name from the user via the command line.
 
     Returns:
@@ -86,11 +90,19 @@ def verify_new_column_name(enforce: bool, original_column_name: str) -> str:
             ]
 
         print(f'A disallowed column name was encountered: "{original_column_name}".')
-        print('Please choose the closest allowed column name, or discard this column.')
+        if discard_allowed:
+            print(
+                'Please choose the closest allowed column name, or discard this column.'
+            )
+        else:
+            print('Please choose the closest allowed column name.')
+
         print(
             'The following are allowable column names. Please make your choice by number.'
         )
-        print('0. DISCARD THIS COLUMN')
+        if discard_allowed:
+            print('0. DISCARD THIS COLUMN')
+
         for i, c in enumerate(ALLOWED_COLUMN_NAMES):
             print(f'{i+1}. {c.replace('_', ' ').title()}')
 
@@ -103,16 +115,24 @@ def verify_new_column_name(enforce: bool, original_column_name: str) -> str:
                 print('That was not a number.\n')
                 continue
 
-            if number not in range(-1, len(ALLOWED_COLUMN_NAMES)):
+            if discard_allowed:
+                allowed_numbers = range(-1, len(ALLOWED_COLUMN_NAMES))
+            else:
+                allowed_numbers = range(len(ALLOWED_COLUMN_NAMES))
+
+            if number not in allowed_numbers:
                 print('That was not a valid choice.\n')
                 continue
 
-            choice = obtain_choice_from_user(
-                ['yes', 'no'], 'Remember this decision? {} '
-            )
-            print()
-            if choice == 'yes':
-                remembered_enforced_column_name_changes[original_column_name] = number
+            if remember:
+                choice = obtain_choice_from_user(
+                    ['yes', 'no'], 'Remember this decision? {} '
+                )
+                print()
+                if choice == 'yes':
+                    remembered_enforced_column_name_changes[original_column_name] = (
+                        number
+                    )
 
             return ALLOWED_COLUMN_NAMES[number] if number != -1 else ''
 
@@ -161,10 +181,11 @@ def strip_csv_whitespace(csv_filename: Path) -> None:
 
 def sanitize_csv_column_names(
     csv_filename: Path,
-    destructive: bool,
+    lossy: bool,
     discard_empty: bool,
     assume_headers: bool,
     enforce_headers: bool,
+    remember_enforced_choices: bool,
 ) -> None:
     """Sanitize CSV column names into ones suitable to be identifiers.
     For these purposes, a suitable identifier is a valid Python identifier.
@@ -173,7 +194,7 @@ def sanitize_csv_column_names(
 
     Args:
         csv_filename: Path of CSV to sanitize columns within.
-        destructive: Assuming everything unsanitary should be discarded.
+        lossy: Assuming everything unsanitary should be discarded.
         assume_headers: Assume the first line of CSV file is headers.
     """
     with open(csv_filename, 'r') as csv_file_obj_r:
@@ -202,7 +223,12 @@ def sanitize_csv_column_names(
                 )
                 if choice == 'rename':
                     new_headers.append(
-                        verify_new_column_name(enforce_headers, headers[column_index])
+                        verify_new_column_name(
+                            enforce_headers,
+                            headers[column_index],
+                            remember_enforced_choices,
+                            False,
+                        )
                     )
                 elif choice == 'discard':
                     discarded_column_indices.append(column_index)
@@ -220,9 +246,14 @@ def sanitize_csv_column_names(
         if not h:
             empty_column_header_indices.append(column_index)
         elif h not in ALLOWED_COLUMN_NAMES and enforce_headers:
-            h = verify_new_column_name(enforce_headers, h)
+            h = verify_new_column_name(
+                enforce_headers,
+                h,
+                remember_enforced_choices,
+                True,
+            )
         elif h[0].isnumeric():
-            if not destructive:
+            if not lossy:
                 print(
                     f'Encountered column name that starts with a number: {h}. This is not allowed.'
                 )
@@ -233,7 +264,12 @@ def sanitize_csv_column_names(
                 choice = 'discard'
 
             if choice == 'rename':
-                h = verify_new_column_name(enforce_headers, h)
+                h = verify_new_column_name(
+                    enforce_headers,
+                    h,
+                    remember_enforced_choices,
+                    False,
+                )
             elif choice == 'discard':
                 discarded_column_indices.append(column_index)
 
@@ -256,7 +292,10 @@ def sanitize_csv_column_names(
 
         if choice == 'rename':
             sanitized_headers[column_index] = verify_new_column_name(
-                enforce_headers, sanitized_headers[column_index]
+                enforce_headers,
+                sanitized_headers[column_index],
+                remember_enforced_choices,
+                False,
             )
         elif choice == 'discard':
             discarded_column_indices.append(column_index)
@@ -331,7 +370,7 @@ def prune_padding_csv_columns(csv_filename: Path) -> None:
         writer.writerows(new_rows)
 
 
-def prune_empty_csv_columns(csv_filename: Path, destructive: bool) -> None:
+def prune_empty_csv_columns(csv_filename: Path, lossy: bool) -> None:
     """Prune empty columns that have a header from a CSV file.
     The user is prompted for every empty column found.
 
@@ -351,7 +390,7 @@ def prune_empty_csv_columns(csv_filename: Path, destructive: bool) -> None:
             if row[column_index] != '':
                 break
         else:
-            if not destructive:
+            if not lossy:
                 print(f'Column "{header}" was found to be empty.')
                 choice = obtain_choice_from_user(
                     ['discard', 'keep'], 'Do you wish to {} this column? '
@@ -444,7 +483,6 @@ def fill_in_missing_entries(csv_filename: Path, enforce_headers: bool) -> None:
     new_rows = []
     for row in rows:
         new_row = {k: v for k, v in row.items()}
-        print(new_row)
         if enforce_headers:
             allowed_headers = ALLOWED_COLUMN_NAMES[:]
             for header in new_row:
@@ -475,10 +513,11 @@ def fill_in_missing_entries(csv_filename: Path, enforce_headers: bool) -> None:
 def convert_excel_file_to_csvs(
     xlsx_filename: Path,
     sanitize_headers: bool,
-    destructive_sanitization: bool,
+    lossy_sanitization: bool,
     discard_empty: bool,
     assume_headers: bool,
     enforce_headers: bool,
+    remember_enforced_choices: bool,
     prune_empty_columns: bool,
     append_metadata: bool,
     filename_regex: re.Pattern,
@@ -491,7 +530,7 @@ def convert_excel_file_to_csvs(
         xlsx_filename: Name of Excel file to convert.
         strip_whitespace: Option to strip whitespace.
         sanitize_headers: Option to sanitize headers.
-        destructive_sanitization: Option to, when sanitizing, discard all problems silently.
+        lossy_sanitization: Option to, when sanitizing, discard all problems silently.
         assume_headers: Option to assume Excel file first row are column headers.
         prune_empty_columns: Option to prune empty columns.
         append_metadata: Option to append file metadata to the CSV based on its filename. Defaults to False.
@@ -512,19 +551,19 @@ def convert_excel_file_to_csvs(
             for row in worksheet.values:
                 writer.writerow(row)
 
-
         strip_csv_whitespace(csv_name)
         prune_empty_csv_rows(csv_name)
         prune_padding_csv_columns(csv_name)
         if prune_empty_columns:
-            prune_empty_csv_columns(csv_name, destructive_sanitization)
+            prune_empty_csv_columns(csv_name, lossy_sanitization)
         if sanitize_headers:
             sanitize_csv_column_names(
                 csv_name,
-                destructive_sanitization,
+                lossy_sanitization,
                 discard_empty,
                 assume_headers,
                 enforce_headers,
+                remember_enforced_choices,
             )
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
@@ -615,28 +654,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='do not sanitize CSV column headers',
     )
     parser.add_argument(
-        '-d',
-        '--destructive-sanitization',
+        '-l',
+        '--lossy-sanitization',
         action='store_true',
-        help='silently discard columns with unsanitary headers without any user prompting. Can cause data to not be converted.',
+        help='silently discard columns with unsanitary headers without any user prompting. Can cause data to not be transferred.',
     )
     parser.add_argument(
-        '-j',
+        '-d',
         '--discard-empty-columns',
         action='store_true',
-        help='silently discard empty columns without any user prompting. Can cause data to not be converted.',
+        help='silently discard columns with empty headers without any user prompting. Can cause data to not be transferred.',
     )
     parser.add_argument(
         '-n',
         '--assume-headers',
         action='store_true',
-        help='assume all Excel files have headers rows. Can cause data to not be converted.',
+        help='assume all Excel files have headers rows. Can cause data to not be transferred.',
     )
     parser.add_argument(
         '-e',
         '--no-enforce-headers',
         action='store_false',
-        help=f'do not enforce at that all column headers are from {'{'}{', '.join(ALLOWED_COLUMN_NAMES)}{'}'}.',
+        help=f'do not enforce at that all column headers are from {'{'}{', '.join(ALLOWED_COLUMN_NAMES)}{'}'}. Headers are enforced even if lossy sanitization is active.',
     )
     parser.add_argument(
         '-p',
@@ -706,16 +745,17 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
         convert_excel_file_to_csvs(
             file,
             sanitize_headers=cmd_args.no_sanitize_headers,
-            destructive_sanitization=cmd_args.destructive_sanitization,
+            lossy_sanitization=cmd_args.lossy_sanitization,
             discard_empty=cmd_args.discard_empty_columns,
             assume_headers=cmd_args.assume_headers,
             enforce_headers=cmd_args.no_enforce_headers,
+            remember_enforced_choices=True,
             prune_empty_columns=cmd_args.no_prune_empty_columns,
             append_metadata=cmd_args.no_append_metadata,
             filename_regex=cmd_args.filename_regex,
             output_dir=cmd_args.output_directory,
         )
-        if not cmd_args.destructive_sanitization:
+        if not cmd_args.lossy_sanitization:
             print()
 
     if cmd_args.merge and not cmd_args.no_sanitize_headers:
@@ -749,10 +789,11 @@ def process_single(cmd_args: argparse.Namespace) -> None:
     convert_excel_file_to_csvs(
         cmd_args.input_path,
         sanitize_headers=cmd_args.no_sanitize_headers,
-        destructive_sanitization=cmd_args.destructive_sanitization,
+        lossy_sanitization=cmd_args.lossy_sanitization,
         discard_empty=cmd_args.discard_empty_columns,
         assume_headers=cmd_args.assume_headers,
         enforce_headers=cmd_args.no_enforce_headers,
+        remember_enforced_choices=False,
         prune_empty_columns=cmd_args.no_prune_empty_columns,
         append_metadata=cmd_args.no_append_metadata,
         filename_regex=cmd_args.filename_regex,
