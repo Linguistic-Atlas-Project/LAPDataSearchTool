@@ -1,5 +1,6 @@
 import argparse
 import csv
+import pickle
 import re
 from contextlib import ExitStack
 from itertools import chain
@@ -7,7 +8,7 @@ from pathlib import Path
 
 import openpyxl as xl
 
-# TODO: functionality to stop script early and rerun later from same spot?
+PROCESSED_DATA_FILENAME = '.processed.pickle'
 
 ALLOWED_COLUMN_NAMES = [
     'informant',
@@ -21,6 +22,12 @@ ALLOWED_COLUMN_NAMES = [
 ]
 
 remembered_enforced_column_name_changes: dict[str, int] = {}
+remembered_kept_named_empty_columns: dict[str, str] = {}
+
+# Dictionary of Paths to bool, False means file was reached but not finished processing
+# True means file was reached and finished processing.
+# Only does anything in batch mode
+processed_files: dict[Path, bool] = {}
 
 
 def obtain_choice_from_user(choices: list[str], message: str) -> str:
@@ -126,7 +133,8 @@ def verify_new_column_name(
 
             if remember:
                 choice = obtain_choice_from_user(
-                    ['yes', 'no'], 'Remember this decision? {} '
+                    ['yes', 'no'],
+                    'Remember this decision for future columns of this name? {} ',
                 )
                 print()
                 if choice == 'yes':
@@ -137,12 +145,13 @@ def verify_new_column_name(
             return ALLOWED_COLUMN_NAMES[number] if number != -1 else ''
 
 
-def print_column_sample(rows: list[list[str]], column_index: int) -> None:
+def print_column_sample(
+    rows: list[list[str]], column_index: int, num_samples: int = 12
+) -> None:
     column_sample: list[str] = []
 
     row_index = 0
-    num_sample_entries = min(12, len(rows))  # TODO: make this 12 an argument?
-
+    num_sample_entries = min(num_samples, len(rows))
     while len(column_sample) < num_sample_entries:
         if (entry := rows[row_index][column_index]) != '':
             column_sample.append(entry)
@@ -370,7 +379,7 @@ def prune_padding_csv_columns(csv_filename: Path) -> None:
         writer.writerows(new_rows)
 
 
-def prune_empty_csv_columns(csv_filename: Path, lossy: bool) -> None:
+def prune_empty_csv_columns(csv_filename: Path, lossy: bool, remember: bool) -> None:
     """Prune empty columns that have a header from a CSV file.
     The user is prompted for every empty column found.
 
@@ -386,6 +395,12 @@ def prune_empty_csv_columns(csv_filename: Path, lossy: bool) -> None:
 
     empty_column_indices = []
     for column_index, header in enumerate(headers):
+        if header in remembered_kept_named_empty_columns:
+            if remembered_kept_named_empty_columns[header] == 'discard':
+                empty_column_indices.append(column_index)
+            else:
+                continue
+
         for row in rows:
             if row[column_index] != '':
                 break
@@ -396,6 +411,14 @@ def prune_empty_csv_columns(csv_filename: Path, lossy: bool) -> None:
                     ['discard', 'keep'], 'Do you wish to {} this column? '
                 )
                 print()
+                if remember:
+                    remember_choice = obtain_choice_from_user(
+                        ['yes', 'no'],
+                        'Remember this decision for future columns of this name? {} ',
+                    )
+                    print()
+                    if remember_choice == 'yes':
+                        remembered_kept_named_empty_columns[header] = choice
             else:
                 choice = 'discard'
 
@@ -517,7 +540,7 @@ def convert_excel_file_to_csvs(
     discard_empty: bool,
     assume_headers: bool,
     enforce_headers: bool,
-    remember_enforced_choices: bool,
+    remember_choices: bool,
     prune_empty_columns: bool,
     append_metadata: bool,
     filename_regex: re.Pattern,
@@ -555,7 +578,11 @@ def convert_excel_file_to_csvs(
         prune_empty_csv_rows(csv_name)
         prune_padding_csv_columns(csv_name)
         if prune_empty_columns:
-            prune_empty_csv_columns(csv_name, lossy_sanitization)
+            prune_empty_csv_columns(
+                csv_name,
+                lossy_sanitization,
+                remember_choices,
+            )
         if sanitize_headers:
             sanitize_csv_column_names(
                 csv_name,
@@ -563,7 +590,7 @@ def convert_excel_file_to_csvs(
                 discard_empty,
                 assume_headers,
                 enforce_headers,
-                remember_enforced_choices,
+                remember_choices,
             )
         if append_metadata:
             append_metadata_from_filename(csv_name, filename_regex, xlsx_filename)
@@ -585,8 +612,9 @@ def merge_all_csv_in_dir(
         ValueError: The input directory was not a directory.
         OSError: An issue occurred when making a previously nonexisting output directory.
     """
-    # TODO: Maybe change this to only process CSV in directory made by script this session?
-    csv_filenames = list(input_dir.glob('*.csv'))
+    csv_filenames = list(
+        file for file in input_dir.glob('*.csv') if file.resolve() in processed_files
+    )
     merged_filename = csv_filenames[0].name.split('_')[0] + '_merged.csv'
 
     with ExitStack() as stack:
@@ -625,7 +653,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         Parser for command line arguments.
     """
     parser = argparse.ArgumentParser(
-        description='process and convert LAP Excel files to CSV format. Original Excel files are untouched.'
+        prog='Process LAP Excels',
+        description='process and convert LAP Excel files to CSV format. Original Excel files are untouched.',
+    )
+    parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='resume the script as it was originally called, if it was paused. Overrides all other options. Although an input path must still be specified, it is ignored',
     )
 
     group = parser.add_mutually_exclusive_group()
@@ -741,7 +775,10 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
         )
 
     for file in cmd_args.input_path.glob('*.xlsx'):
+        if processed_files.get(file.resolve(), False):
+            continue
         print(f'Processing: {file}')
+        processed_files[file.resolve()] = False
         convert_excel_file_to_csvs(
             file,
             sanitize_headers=cmd_args.no_sanitize_headers,
@@ -749,12 +786,13 @@ def process_batch(cmd_args: argparse.Namespace) -> None:
             discard_empty=cmd_args.discard_empty_columns,
             assume_headers=cmd_args.assume_headers,
             enforce_headers=cmd_args.no_enforce_headers,
-            remember_enforced_choices=True,
+            remember_choices=True,
             prune_empty_columns=cmd_args.no_prune_empty_columns,
             append_metadata=cmd_args.no_append_metadata,
             filename_regex=cmd_args.filename_regex,
             output_dir=cmd_args.output_directory,
         )
+        processed_files[file.resolve()] = True
         if not cmd_args.lossy_sanitization:
             print()
 
@@ -793,7 +831,7 @@ def process_single(cmd_args: argparse.Namespace) -> None:
         discard_empty=cmd_args.discard_empty_columns,
         assume_headers=cmd_args.assume_headers,
         enforce_headers=cmd_args.no_enforce_headers,
-        remember_enforced_choices=False,
+        remember_choices=False,
         prune_empty_columns=cmd_args.no_prune_empty_columns,
         append_metadata=cmd_args.no_append_metadata,
         filename_regex=cmd_args.filename_regex,
@@ -815,8 +853,28 @@ def main() -> None:
         FileNotFoundError: Input directory does not exist.
         OSError: Error occurred making output directory (if it did not exist).
     """
+    global processed_files
+    global remembered_enforced_column_name_changes
+    global remembered_kept_named_empty_columns
+
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    if args.resume:
+        try:
+            with open(PROCESSED_DATA_FILENAME, 'rb') as fp:
+                (
+                    args,
+                    processed_files,
+                    remembered_enforced_column_name_changes,
+                    remembered_kept_named_empty_columns,
+                ) = pickle.load(fp)
+        except FileNotFoundError:
+            print(
+                'No saved data was found to resume the script from. '
+                'Please ensure you are running the script from the same location, or otherwise run the script normally.'
+            )
+            return
 
     if not args.input_path.exists():
         raise FileNotFoundError('Input path does not exist')
@@ -827,11 +885,24 @@ def main() -> None:
         except OSError as e:
             raise OSError('Issue occurred making output directory') from e
 
-    if args.mode == 'batch':
-        process_batch(args)
+    try:
+        if args.mode == 'batch':
+            process_batch(args)
 
-    elif args.mode == 'single':
-        process_single(args)
+        elif args.mode == 'single':
+            process_single(args)
+    except KeyboardInterrupt:
+        data = (
+            args,
+            processed_files,
+            remembered_enforced_column_name_changes,
+            remembered_kept_named_empty_columns,
+        )
+        with open(PROCESSED_DATA_FILENAME, 'wb') as fp:
+            pickle.dump(data, fp)
+        print()
+    else:
+        Path(PROCESSED_DATA_FILENAME).unlink()
 
 
 if __name__ == '__main__':
