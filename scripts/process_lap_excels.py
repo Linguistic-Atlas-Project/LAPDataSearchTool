@@ -181,7 +181,7 @@ class LAPExcelProcessor:
 
         cleaned_rows = []
 
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             for row in csv.reader(csv_file_obj_r):
                 cleaned_row = []
                 for value in row:
@@ -191,7 +191,7 @@ class LAPExcelProcessor:
                         cleaned_row.append(value)
                 cleaned_rows.append(cleaned_row)
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.writer(csv_file_obj_w)
             writer.writerows(cleaned_rows)
 
@@ -214,7 +214,7 @@ class LAPExcelProcessor:
             lossy: Assuming everything unsanitary should be discarded.
             assume_headers: Assume the first line of CSV file is headers.
         """
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.reader(csv_file_obj_r)
             headers = next(reader)
             rows = list(reader)
@@ -322,7 +322,7 @@ class LAPExcelProcessor:
             for row in rows:
                 row.pop(column_index)
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.writer(csv_file_obj_w)
             writer.writerow(sanitized_headers)
             writer.writerows(rows)
@@ -335,11 +335,11 @@ class LAPExcelProcessor:
         Args:
             csv_filename: Path of CSV file to prune.
         """
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.reader(csv_file_obj_r)
             new_rows = [row for row in reader if not all('' == s for s in row)]
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.writer(csv_file_obj_w)
             writer.writerows(new_rows)
 
@@ -351,7 +351,7 @@ class LAPExcelProcessor:
         Args:
             csv_filename: Path of CSV file to prune.
         """
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.reader(csv_file_obj_r)
             headers = next(reader)
             rows = list(reader)
@@ -380,7 +380,7 @@ class LAPExcelProcessor:
                 new_row.pop(empty_index)
             new_rows.append(new_row)
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.writer(csv_file_obj_w)
             writer.writerows(new_rows)
 
@@ -395,7 +395,7 @@ class LAPExcelProcessor:
         Args:
             csv_filename: Path of CSV file to prune.
         """
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.reader(csv_file_obj_r)
             headers = next(reader)
             rows = list(reader)
@@ -439,7 +439,7 @@ class LAPExcelProcessor:
                 new_row.pop(empty_index)
             new_rows.append(new_row)
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.writer(csv_file_obj_w)
             writer.writerows(new_rows)
 
@@ -483,7 +483,7 @@ class LAPExcelProcessor:
                     f'Filename regex returned a group "{key}" that is not one of "project", "page", or "line"'
                 )
 
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.DictReader(csv_file_obj_r)
             fieldnames = reader.fieldnames
             if fieldnames is None:
@@ -493,7 +493,7 @@ class LAPExcelProcessor:
         new_rows = [row | metadata | {'filename': xlsx_filename.name} for row in rows]
         fieldnames = [*fieldnames, *metadata.keys(), 'filename']
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.DictWriter(csv_file_obj_w, fieldnames)
             writer.writeheader()
             writer.writerows(new_rows)
@@ -501,7 +501,7 @@ class LAPExcelProcessor:
     def fill_in_missing_entries(
         self, csv_filename: Path, enforce_headers: bool
     ) -> None:
-        with open(csv_filename, 'r') as csv_file_obj_r:
+        with open(csv_filename, 'r', newline='', encoding='utf8') as csv_file_obj_r:
             reader = csv.DictReader(csv_file_obj_r)
             fieldnames = reader.fieldnames
             if fieldnames is None:
@@ -535,7 +535,7 @@ class LAPExcelProcessor:
 
             new_rows.append(new_row)
 
-        with open(csv_filename, 'w') as csv_file_obj_w:
+        with open(csv_filename, 'w', newline='', encoding='utf8') as csv_file_obj_w:
             writer = csv.DictWriter(csv_file_obj_w, fieldnames)
             writer.writeheader()
             writer.writerows(new_rows)
@@ -577,7 +577,7 @@ class LAPExcelProcessor:
             csv_name = output_dir / (
                 xlsx_filename.stem.replace(' ', '_') + f'_{worksheet.title}.csv'
             )
-            with open(csv_name, 'w') as csv_file_obj:
+            with open(csv_name, 'w', newline='', encoding='utf8') as csv_file_obj:
                 writer = csv.writer(csv_file_obj)
                 for row in worksheet.values:
                     writer.writerow(row)
@@ -632,11 +632,11 @@ class LAPExcelProcessor:
 
         with ExitStack() as stack:
             csv_files = {
-                csv_file: stack.enter_context(open(csv_file, 'r'))
+                csv_file: stack.enter_context(open(csv_file, 'r', newline='', encoding='utf8'))
                 for csv_file in csv_filenames
                 if 'merged' not in csv_file.name
             }
-            output_file = stack.enter_context(open(output_dir / merged_filename, 'w'))
+            output_file = stack.enter_context(open(output_dir / merged_filename, 'w', newline='', encoding='utf8'))
 
             readers = {name: csv.DictReader(fp) for name, fp in csv_files.items()}
             all_headers = chain(*(r.fieldnames for r in readers.values()))  # type: ignore
@@ -790,6 +790,9 @@ class LAPExcelProcessor:
             with open(self.PROCESSED_DATA_FILENAME, 'wb') as fp:
                 pickle.dump(data, fp)
             print()
+        except Exception as e:
+            print('An unanticipated exception occurred:')
+            print(e)
         else:
             Path(self.PROCESSED_DATA_FILENAME).unlink(True)
 
